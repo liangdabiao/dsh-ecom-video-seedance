@@ -16,6 +16,13 @@ DeepSeek Harness（dsh）插件：**带货视频反向拆解与 Seedance 复刻�
 npm install && npm test && npm run selftest && npm run build
 ```
 
+
+## 安装
+
+```bash
+dsh plugin --profile web add dsh-ecom-video-seedance
+```
+
 ## 许可
 
 MIT（liangdabiao）
