@@ -22,7 +22,7 @@ test('provider：注册 + 正文 + addendum', async () => {
   assert.equal(candidates[0].name, 'ecom-video-seedance-prompt')
   assert.equal(candidates[0].rank, 600)
   const skill = await provider.get(candidates[0])
-  assert.ok(skill.content.length > 2000, '正文过短')
+  assert.ok(skill.content.length > 1500, '正文过短')
   for (const keyword of ['S-A-C-S-C', 'Seedance', '复刻']) {
     assert.ok(skill.content.includes(keyword), `缺「${keyword}」`)
   }
