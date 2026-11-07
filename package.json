@@ -1,7 +1,7 @@
 {
   "name": "dsh-ecom-video-seedance",
-  "version": "0.1.0",
-  "description": "带货视频拆解",
+  "version": "0.2.0",
+  "description": "带货视频拆解工作台：seedance_storyboard 分镜表持久化（save/list/get/delete，get 渲染成 Seedance 分段提示）。侧栏分镜表面板。",
   "license": "MIT",
   "type": "module",
   "main": "src/host.js",

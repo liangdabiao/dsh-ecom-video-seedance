@@ -33,15 +33,63 @@ function GuideTab() {
       h('div', { style: styles.muted }, 'Reverse-engineer ecom videos into Seedance prompts')))
 }
 
+
+// ---------- 分镜表 ----------
+function fmtTime(iso) {
+  try {
+    const d = new Date(iso)
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+  } catch { return iso || '' }
+}
+
+function BoardsTab() {
+  const [boards, setBoards] = useState(null)
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(null)
+  useEffect(() => {
+    fetchJson('/api/boards').then((d) => setBoards(d.boards)).catch((e) => setError(e.message))
+  }, [])
+  if (error) return h('div', { style: styles.error }, error)
+  if (boards === null) return h('div', { style: styles.muted }, '加载中…')
+  if (!boards.length) {
+    return h('div', { style: styles.muted },
+      '还没有分镜表。在对话里说「拆解这条带货视频（贴链接）」或「给保温杯写一条 15 秒种草分镜脚本」，模型会用 seedance_storyboard 保存。')
+  }
+  const board = open ? boards.find((b) => b.id === open) : null
+  if (board) {
+    return h('div', null,
+      h('div', { style: styles.row },
+        h('button', { style: styles.chip, onClick: () => setOpen(null) }, '← 返回列表'),
+        h('div', { style: styles.boardTitle }, board.product || board.id),
+        board.style ? h('span', { style: styles.note }, board.style) : null),
+      board.scenes.map((s) => h('div', { key: s.index, style: styles.card },
+        h('div', { style: styles.sceneTitle }, '分镜 ' + s.index + (s.duration ? '（' + s.duration + 's）' : '') + '：' + s.shot),
+        s.visual ? h('div', { style: styles.mutedSmall }, '画面：' + s.visual) : null,
+        s.narration ? h('div', { style: styles.narration }, '口播：' + s.narration) : null)))
+  }
+  return h('div', null, boards.map((b) => h('div', {
+    key: b.id, style: styles.card, onClick: () => setOpen(b.id), title: '点击展开分镜',
+  },
+    h('div', { style: styles.boardTitle }, b.product || b.id),
+    h('div', { style: styles.mutedSmall }, b.scenes.length + ' 镜' + (b.style ? ' · ' + b.style : '') + ' · ' + fmtTime(b.updatedAt)))))
+}
+
 function Panel() {
-  const [tab, setTab] = useState('guide')
+  const [tab, setTab] = useState('boards')
   return h('div', { style: styles.wrap },
     h('div', { style: styles.row },
-      h('button', { style: styles.tabActive }, '📖 使用指南')),
-    h(GuideTab))
+      h('button', { style: tab === 'boards' ? styles.tabActive : styles.tab, onClick: () => setTab('boards') }, '🎬 分镜表'),
+      h('button', { style: tab === 'guide' ? styles.tabActive : styles.tab, onClick: () => setTab('guide') }, '📖 使用指南')),
+    tab === 'boards' ? h(BoardsTab) : h(GuideTab))
 }
 
 const styles = {
+  chip: { padding: '4px 12px', border: '1px solid #d9d9de', borderRadius: 999, background: '#fff', cursor: 'pointer', fontSize: 12 },
+  boardTitle: { fontWeight: 700, color: '#4c6bfb' },
+  sceneTitle: { fontWeight: 600, fontSize: 12.5, marginBottom: 4 },
+  narration: { color: '#4a4a50', fontSize: 12, lineHeight: 1.6 },
+  note: { background: '#e8eef7', color: '#4c6bfb', borderRadius: 4, padding: '1px 6px', fontSize: 11 },
+  mutedSmall: { color: '#a0a0a8', fontSize: 12, lineHeight: 1.7 },
   wrap: { padding: 16, overflow: 'auto', height: '100%', boxSizing: 'border-box', fontFamily: '-apple-system, "Segoe UI", "Microsoft YaHei", sans-serif', fontSize: 13, color: '#1a1a1a' },
   row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 },
   tabActive: { padding: '8px 16px', border: '1px solid #4c6bfb', borderRadius: 8, background: '#eef1fd', color: '#1a3a8c', fontWeight: 600, fontSize: 13 },
