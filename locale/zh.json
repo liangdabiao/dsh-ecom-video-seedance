@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "带货视频拆解",
-    "description": "Reverse-engineer ecom videos into Seedance prompts"
+    "description": "把带货爆款视频拆成镜头级分镜表，再翻译成即梦 / Seedance 可直接执行的提示词（S-A-C-S-C 规范）。侧栏工作台含概览、我的分镜、生成历史（每保存一版留档、删除可恢复）、拆解·创作与规范说明。"
   }
 }

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "带货视频拆解",
-    "description": "Reverse-engineer ecom videos into Seedance prompts"
+    "title": "Ecom video → Seedance prompt",
+    "description": "Reverse-engineer ecom videos into shot-level storyboards, then translate them into Jimeng/Seedance prompts under the S-A-C-S-C spec. The sidebar workbench has overview, storyboards, revision history (restorable deletes), analyze/create form and the spec guide."
   }
 }

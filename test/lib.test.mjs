@@ -1,11 +1,18 @@
 // 快照合规 + provider 单测。零 dsh 依赖零网络。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+// 数据目录必须先指到 .tmp：lib/data.js 在被 import 的那一刻就把 DATA_DIR 定死了，
+// 晚一步设置 DSH_HOME 就会把测试数据写进真实的 ~/.dsh/ecom-video-seedance/。
+const TEST_HOME = join(ROOT, '.tmp', 'test-home')
+rmSync(TEST_HOME, { recursive: true, force: true })
+process.env.DSH_HOME = TEST_HOME
+
 const { createSkillProvider } = await import('../lib/skills.js')
 const { requestRejection } = await import('../lib/api.js')
 
@@ -36,8 +43,7 @@ test('面板 API 鉴权 fail closed', () => {
 })
 
 // ── 升级新增：分镜表持久化 ──────────────────────────────────
-process.env.DSH_HOME = new URL('../.tmp/test-home/', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
-
+// DSH_HOME 已经在文件最上面指到 .tmp/test-home，这里只按需加载数据层。
 const data = await import('../lib/data.js')
 const host = await import('../src/host.js')
 
