@@ -5,6 +5,10 @@ DeepSeek Harness（dsh）插件：**带货视频反向拆解与 Seedance 复刻�
 
 技能来自 [ecom-video-seedance-prompt](https://github.com/liangdabiao/ecom-video-seedance-prompt)（liangdabiao）。
 
+<img width="1686" height="1011" alt="image" src="https://github.com/user-attachments/assets/ab11b959-1f7c-457a-8fdf-4cc6f43698a7" />
+<img width="2502" height="1116" alt="image" src="https://github.com/user-attachments/assets/3dad0f63-4f20-4348-a2a5-6ada43ae49ad" />
+
+
 ## 装了什么
 
 | 能力 | 说明 |
