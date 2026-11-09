@@ -1,6 +1,6 @@
 {
   "name": "dsh-ecom-video-seedance",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "带货视频拆解工作台：seedance_storyboard 分镜表持久化（save/list/get/delete/history/stats/restore，每保存一次多一版）。侧栏「带货视频拆解」工作台：概览 / 我的分镜 / 生成历史 / 拆解·创作 / S-A-C-S-C 规范。",
   "license": "MIT",
   "type": "module",

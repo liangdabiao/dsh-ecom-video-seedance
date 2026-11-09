@@ -1,7 +1,7 @@
 // 接口验收：起一个本地 http 挂 registerApi 的 handler，用真实 fetch 打一遍工作台接口。
 // 不碰真实数据目录（DSH_HOME 指到 .tmp/），不联网。
 import { createServer } from 'node:http'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = join(process.cwd(), '.tmp', 'api-test')
@@ -14,7 +14,8 @@ const data = await import('../lib/data.js')
 
 let handler = null
 const ctx = { get: () => undefined, webServer: { register(cfg) { handler = cfg.handler; return () => {} } } }
-registerApi(ctx, { skillDirs: [join(process.cwd(), 'skills')] })
+const pickStub = { result: null }
+registerApi(ctx, { skillDirs: [join(process.cwd(), 'skills')], picker: async () => pickStub.result })
 if (!handler) throw new Error('registerApi 没注册 handler')
 
 const server = createServer((req, res) => handler(req, res))
@@ -51,7 +52,7 @@ try {
   ] })
 
   const ping = await get(`${P}/api/ping`)
-  check('ping', ping.status === 200 && JSON.parse(ping.text).version === '0.3.0', ping.text)
+  check('ping', ping.status === 200 && String(JSON.parse(ping.text).version).startsWith('0.3.'), ping.text)
 
   const cat = JSON.parse((await get(`${P}/api/catalog`)).text)
   check('catalog: 分镜表 2 张', cat.ok && cat.boards.length === 2, `boards=${cat.boards.length}`)
@@ -87,6 +88,21 @@ try {
   check('静态页面 app.js', js.status === 200 && js.text.includes('renderHistory'))
   const traversal = await get(`${P}/..%2f..%2fpackage.json`)
   check('静态页面越界被拒', traversal.status === 404, String(traversal.status))
+
+  // ── 选视频弹窗（picker 注入 stub，不真的弹框）
+  const videoFile = join(ROOT, 'demo.mp4')
+  writeFileSync(videoFile, 'fake', 'utf8')
+  pickStub.result = { ok: true, path: videoFile }
+  const picked = await postJson(`${P}/api/pick`, { title: '选择带货视频' })
+  check('pick: 选中文件返回绝对路径', picked.status === 200 && picked.json.ok === true && picked.json.path === videoFile && picked.json.isFile === true, picked.json.path)
+  pickStub.result = { ok: false, cancelled: true }
+  const cancelled = await postJson(`${P}/api/pick`, {})
+  check('pick: 取消', cancelled.json.ok === false && cancelled.json.cancelled === true)
+  pickStub.result = { ok: false, error: 'dialog failed' }
+  const pickErr = await postJson(`${P}/api/pick`, {})
+  check('pick: 出错透传', pickErr.json.ok === false && pickErr.json.error === 'dialog failed')
+  const cap = JSON.parse((await get(`${P}/api/catalog`)).text)
+  check('catalog: capabilities.pickVideo', typeof cap.capabilities.pickVideo === 'boolean', String(cap.capabilities.pickVideo))
 
   // 兼容旧面板
   const legacyBoards = JSON.parse((await get(`${P}/api/boards`)).text)

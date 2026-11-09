@@ -435,7 +435,11 @@ function renderNew() {
     <div class="panel">
       <div class="form">
         <label class="fld full">视频路径 / 链接（有原片就填，直接创作可留空）
-          <input id="f-video" placeholder="如 D:\\videos\\爆款.mp4 或 https://...">
+          <div class="input-row">
+            <input id="f-video" placeholder="如 D:\\videos\\爆款.mp4 或 https://...">
+            <button class="btn ghost" id="f-pick" title="打开系统的「打开文件」对话框">浏览…</button>
+          </div>
+          <span class="fld-hint" id="pick-hint">点「浏览…」可以直接在资源管理器里挑视频，不用手打路径。</span>
         </label>
         <label class="fld">产品信息
           <input id="f-product" placeholder="品牌名，主打卖点，色号/规格">
@@ -475,6 +479,43 @@ function renderNew() {
     duration: Number(document.getElementById('f-duration').value) || 15,
     note: document.getElementById('f-note').value.trim()
   })
+
+  // 选视频：宿主弹系统原生文件框，选完把绝对路径填进输入框
+  const pickBtn = document.getElementById('f-pick')
+  const pickHint = document.getElementById('pick-hint')
+  const caps = (state.catalog && state.catalog.capabilities) || {}
+  if (caps.pickVideo === false) {
+    pickBtn.disabled = true
+    pickBtn.style.opacity = 0.45
+    if (pickHint) pickHint.textContent = '当前系统不支持弹窗选文件（仅 Windows 支持），请手动填写路径。'
+  } else {
+    pickBtn.addEventListener('click', async () => {
+      const label = pickBtn.textContent
+      pickBtn.disabled = true
+      pickBtn.textContent = '选择中…'
+      if (pickHint) pickHint.textContent = '已弹出文件选择框，选好后会自动填进来（取消就点关闭）。'
+      try {
+        const r = await post('/api/pick', { title: '选择带货视频' })
+        if (r.ok && r.path) {
+          document.getElementById('f-video').value = r.path
+          if (pickHint) pickHint.textContent = r.exists === false ? '选到了路径，但文件似乎不在原处了，请确认。' : '已选择：' + r.path
+          toast('已选择视频：' + String(r.path).split(/[\\/]/).pop())
+        } else if (r.cancelled) {
+          toast('已取消选择')
+          if (pickHint) pickHint.textContent = '点「浏览…」可以直接在资源管理器里挑视频，不用手打路径。'
+        } else {
+          toast(r.error || '没有选到文件')
+          if (pickHint) pickHint.textContent = r.error || '没有选到文件，也可以手动填路径。'
+        }
+      } catch (err) {
+        toast('打开文件框失败：' + err.message)
+        if (pickHint) pickHint.textContent = '打开文件框失败，请手动填写路径。'
+      } finally {
+        pickBtn.disabled = false
+        pickBtn.textContent = label
+      }
+    })
+  }
   const common = (f) => `产品信息：${f.product || '（我没写，按画面/原片推断）'}\n目标时长：${f.duration}s\n风格：${f.styleLabel}（--style ${f.style}）${f.note ? `\n补充要求：${f.note}` : ''}`
 
   document.getElementById('f-analyze').addEventListener('click', () => {

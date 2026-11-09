@@ -87,3 +87,26 @@ test('host: seedance_storyboard save/list/get/delete 全链路', async () => {
   const del = await host.seedanceStoryboardTool.execute({ action: 'delete', id, confirm: 'yes' })
   assert.equal(del.ok, true)
 })
+
+// ── 选视频弹窗（picker.js，注入 fake run，不真的弹框） ──────────────
+const picker = await import('../lib/picker.js')
+
+test('picker: 脚本编码可还原 + 含文件滤镜', () => {
+  assert.equal(picker.pickerSupported(), process.platform === 'win32')
+  const script = Buffer.from(picker.buildPickScript({ title: '选带货视频' }), 'base64').toString('utf16le')
+  assert.match(script, /System\.Windows\.Forms\.OpenFileDialog/)
+  assert.match(script, /CheckFileExists = \$true/)
+  assert.match(script, /\*\.mp4/)
+  assert.match(script, /选带货视频/)
+})
+
+test('picker: 选中/取消/出错三种返回', async () => {
+  const ok = await picker.pickFile({ run: async () => ({ code: 0, stdout: 'D:\\v\\a.mp4\r\n', stderr: '' }) })
+  assert.deepEqual(ok, { ok: true, path: 'D:\\v\\a.mp4' })
+  const cancelled = await picker.pickFile({ run: async () => ({ code: 0, stdout: '', stderr: '' }) })
+  assert.equal(cancelled.ok, false)
+  assert.equal(cancelled.cancelled, true)
+  const failed = await picker.pickFile({ run: async () => ({ code: 1, stdout: '', stderr: 'boom' }) })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error, 'boom')
+})

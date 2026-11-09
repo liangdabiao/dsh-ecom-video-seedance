@@ -1,4 +1,5 @@
-// 带货视频拆解 · Host 半边（技能 + seedance_storyboard 原生工具 + 工作台数据面）。
+// 带货视频拆解 · Host 半边（技能 + seedance_storyboard 原生工具 + 工作台数据面；选视频弹窗见 lib/picker.js）。
+import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createSkillProvider } from '../lib/skills.js'
@@ -7,6 +8,10 @@ import {
   listBoards, getBoard, saveBoard, deleteBoard, renderBoard,
   listHistory, getHistory, restoreFromHistory, stats, KIND_LABEL
 } from '../lib/data.js'
+
+const PLUGIN_VERSION = (() => {
+  try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version } catch { return '?' }
+})()
 
 export const name = 'ecom-video-seedance'
 
@@ -56,7 +61,8 @@ export const seedanceStoryboardTool = {
   description:
     '管理带货视频的分镜表（持久化，每保存一次多一版）：save 保存分镜表（产品+风格+分镜数组，每镜含 shot 镜头/narration 口播/visual 画面/duration 秒数）、' +
     'list 列全部、get 取详情并渲染成 Seedance 分段提示文本、delete 删除、history 看生成历史（新建/更新/删除/恢复）、' +
-    'stats 汇总、restore 从删除快照恢复。拆解或创作带货视频时用 save 存分镜表，用户可在侧栏「带货视频」工作台回看。',
+    'stats 汇总、restore 从删除快照恢复。拆解或创作带货视频时用 save 存分镜表，用户可在侧栏「带货视频」工作台回看。' +
+    '（工作台「拆解 / 创作」的视频路径支持点「浏览…」用系统文件框选择，Windows 宿主可用，其他系统需手填。）',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -107,7 +113,8 @@ export const seedanceStoryboardTool = {
       return result(true, `共 ${s.boards} 张分镜表（${s.revisions} 版历史）`, [
         `镜头合计 ${s.scenes} 个，时长合计 ${s.duration}s（平均每张 ${s.avgDuration}s、每镜 ${s.avgShot}s）`,
         `风格分布：${styles}`,
-        `历史事件 ${s.events} 条${s.lastEventAt ? `，最近 ${String(s.lastEventAt).replace('T', ' ').slice(0, 16)}` : ''}`
+        `历史事件 ${s.events} 条${s.lastEventAt ? `，最近 ${String(s.lastEventAt).replace('T', ' ').slice(0, 16)}` : ''}`,
+        `工作台：侧栏「带货视频」· v${PLUGIN_VERSION}（拆解·创作里的视频路径可点「浏览…」选文件）`
       ].join('\n'))
     }
 
