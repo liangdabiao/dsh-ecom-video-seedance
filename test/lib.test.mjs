@@ -1,7 +1,7 @@
 // 快照合规 + provider 单测。零 dsh 依赖零网络。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -20,6 +20,29 @@ test('快照完整：SKILL.md + references', () => {
   assert.ok(existsSync(join(ROOT, 'skills', 'ecom-video-seedance', 'SKILL.md')), '缺 SKILL.md')
   const refs = readdirSync(join(ROOT, 'skills', 'ecom-video-seedance', 'references')).filter((f) => f.endsWith('.md'))
   assert.ok(refs.length >= 2, `references ${refs.length} < 2`)
+})
+
+test('脚本：只留 analyze/replicate，且零 API 依赖', () => {
+  const dir = join(ROOT, 'skills', 'ecom-video-seedance', 'scripts')
+  const files = readdirSync(dir)
+  assert.ok(files.includes('analyze.py'), '缺 analyze.py')
+  assert.ok(files.includes('replicate.py'), '缺 replicate.py')
+  assert.ok(!files.includes('ds_client.py'), 'ds_client.py 应已删除（脚本不再调模型）')
+  for (const f of files.filter((x) => x.endsWith('.py'))) {
+    const src = readFileSync(join(dir, f), 'utf8')
+    assert.ok(!/import\s+openai|from\s+openai/.test(src), `${f} 不应 import openai`)
+    assert.ok(!/DEEPSEEK_API_KEY|deepseek_api_key/.test(src), `${f} 不应读取 API key`)
+    assert.ok(!/https?:\/\/api\./.test(src), `${f} 不应直接请求 API`)
+  }
+})
+
+test('SKILL 正文：说明 agent 读帧 + 零密钥', async () => {
+  const provider = createSkillProvider([join(ROOT, 'skills')])
+  const skill = await provider.get((await provider.list())[0])
+  assert.match(skill.content, /read_image/, '应告诉 agent 用 read_image 读帧')
+  assert.match(skill.content, /零密钥|不需要任何 API key/, '应说明零密钥')
+  assert.match(skill.content, /analyze\.py/, '应保留 analyze.py 用法')
+  assert.match(skill.content, /replicate\.py/, '应保留 replicate.py 用法')
 })
 
 test('provider：注册 + 正文 + addendum', async () => {

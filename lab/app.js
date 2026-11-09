@@ -459,9 +459,9 @@ function renderNew() {
         <button class="btn ghost" id="f-create">没有原片，直接写一条 →</button>
       </div>
       <div class="note" style="margin-top:12px">
-        拆解用技能里的 <code>analyze.py</code>（ffmpeg 抽帧 + 场景切换检测）逐镜头出 S-A-C-S-C 拆解卡，
-        再用 <code>replicate.py</code> 产出提示词包；需要 <code>DEEPSEEK_API_KEY</code> 和 PATH 里的 ffmpeg。
-        没有原片也能直接按产品写脚本。
+        拆解由 <b>agent 直接看帧</b>完成：<code>analyze.py</code> 只用 ffmpeg 抽帧 + 场景切换检测切镜头，
+        再用 <code>replicate.py</code> 做字数/字段硬校验并渲染提示词包。
+        <b>零 API 密钥</b>，只需要 PATH 里的 ffmpeg。没有原片也能直接按产品写脚本。
       </div>
     </div>
 
@@ -526,12 +526,13 @@ function renderNew() {
 原片：${f.video}
 ${common(f)}
 
-请用 ecom-video-seedance-prompt 技能：
-1. 先把技能目录复制到工作区（技能正文里有 cp 命令），再在工作区副本里跑 python scripts/analyze.py "${f.video}"（必要时 --min-shot 0.8）。
-2. 跑 python scripts/replicate.py "${f.video}" --style ${f.style}${f.product ? ` --product "${f.product}"` : ''} --duration ${f.duration}，产出提示词包（每镜 ≤200 字、完整版 ≤800 字、负面词中英、@参考图清单）。
-3. 把分镜表用 seedance_storyboard action=save 存下来：product=${f.product || '（按原片推断）'}、style=${f.styleLabel}、note="初版"，
+请用 ecom-video-seedance-prompt 技能（零 API 密钥：脚本只抽帧/校验/渲染，看帧拆解由你自己做）：
+1. 先把技能目录复制到工作区（技能正文里有 cp 命令），再在工作区副本里跑 python scripts/analyze.py "${f.video}"，拿到每镜关键帧清单。
+2. 用 read_image 逐个镜头读关键帧（一次并发读 6-8 张，先通读全片再动笔），按 S-A-C-S-C 写 storyboard.json（.cache 目录）+ payload_${f.style}.json（提示词包）。
+3. 跑 python scripts/replicate.py "${f.video}" --payload payload_${f.style}.json --style ${f.style} --duration ${f.duration}，校验（每镜 ≤200 字、完整版 ≤800 字）不过就改 JSON 重跑，通过后出 HTML。
+4. 把分镜表用 seedance_storyboard action=save 存下来：product=${f.product || '（按原片推断）'}、style=${f.styleLabel}、note="初版"，
    scenes 是 JSON 数组，每镜 {shot 镜头一句话, narration 口播, visual 画面要点, duration 秒}。
-4. 交付：给 HTML 预览路径 + 完整版提示词；说明哪些元素不可控（LOGO 等）要按差异说明处理。
+5. 交付：给 HTML 预览路径 + 完整版提示词；说明哪些元素不可控（LOGO 等）要按差异说明处理。
 每存一版，侧栏「带货视频拆解 · 生成历史」里都会留记录。`)
   })
 
@@ -560,7 +561,7 @@ function renderGuide() {
       <span class="eyebrow">S-A-C-S-C</span>
       <h1>提示词五要素</h1>
       <p>五项缺一个，模型就在那个维度自由发挥——而自由发挥通常就是翻车现场（六根手指、脸崩、头发粘成一块）。
-         技能做的事，就是让视觉模型替你完成这套「人肉拆解」。</p>
+         技能做的事，就是让 agent 的视觉能力（直接读关键帧）替你完成这套「人肉拆解」。</p>
     </header>
     <div class="panel">
       <table>
@@ -578,13 +579,15 @@ function renderGuide() {
     <div class="grid">
       <div class="card plain">
         <div class="card-top"><span class="card-title" style="color:var(--accent-ink)">01 · 拆解</span></div>
-        <div class="card-sub">analyze.py：ffmpeg 抽帧 + 场景切换检测切镜头 → 视觉模型逐镜出拆解卡 → 全片带货整体分析（产品/框架/自然流 or 付费流/钩子/节奏），结果缓存。</div>
+        <div class="card-sub">analyze.py（零 API）：ffprobe 元信息 + 1fps 抽帧 + 场景切换检测切镜头 + 每镜关键帧清单；
+          然后 agent 用 read_image 直接读帧，按 S-A-C-S-C 写拆解卡。</div>
         <div class="pre" style="margin-top:8px">python scripts/analyze.py "&lt;视频&gt;"</div>
       </div>
       <div class="card plain">
         <div class="card-top"><span class="card-title" style="color:var(--jade)">02 · 复刻</span></div>
-        <div class="card-sub">replicate.py：分镜表 + 编导规则知识库 → 一次推理产出提示词包（每镜 / 完整版 / 负面词 / @参考图清单 / 差异说明 / 升级建议）。</div>
-        <div class="pre" style="margin-top:8px">python scripts/replicate.py "&lt;视频&gt;" --style faithful|organic|paid</div>
+        <div class="card-sub">replicate.py（零 API）：硬校验分镜表与提示词包（每镜 ≤200 字 / 完整版 ≤800 字 / 字段齐全 / 镜头对齐），
+          通过后渲染 md + 自包含 HTML（每镜配原片关键帧）。</div>
+        <div class="pre" style="margin-top:8px">python scripts/replicate.py "&lt;视频&gt;" --payload payload_faithful.json --style faithful</div>
       </div>
       <div class="card plain">
         <div class="card-top"><span class="card-title" style="color:var(--gold)">03 · 存档</span></div>
@@ -605,9 +608,9 @@ function renderGuide() {
     <div class="sec-head"><h2>常见问题</h2></div>
     <div class="panel">
       <dl class="kv">
-        <dt>要装什么</dt><dd>Python 的 openai 包、PATH 里有 ffmpeg/ffprobe、环境变量 DEEPSEEK_API_KEY（或 ~/.deepseek_api_key 首行）。</dd>
+        <dt>要装什么</dt><dd>只需要 PATH 里有 ffmpeg/ffprobe，Python 3.8+ 只用标准库。<b>不需要任何 API key</b>：脚本不联网，看帧拆解由 agent 自己做。</dd>
         <dt>为什么读不到插件目录</dt><dd>bash 沙箱读不到插件安装目录：技能正文会让你先把技能目录 cp 到工作区再跑脚本。</dd>
-        <dt>能改风格吗</dt><dd>能，--style 换 faithful / organic / paid 重跑；已有分镜表则直接改镜头再 save。</dd>
+        <dt>能改风格吗</dt><dd>能，复制一份 payload 改文案、用 --style organic|paid 重跑；已有分镜表则直接改镜头再 save。</dd>
         <dt>历史存哪</dt><dd>$DSH_HOME/ecom-video-seedance/：storyboards.json（分镜表 + 每版快照）、history.json（新建/更新/删除/恢复事件）。</dd>
         <dt>删除能救回吗</dt><dd>能。生成历史里删除记录带快照，点「恢复成新分镜表」即可（生成新 id，原 id 不复活）。</dd>
       </dl>

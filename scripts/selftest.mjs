@@ -1,5 +1,5 @@
 // 离线自检：快照 + provider + 面板 API。零网络。
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,6 +18,17 @@ await step('快照完整 + provider 正文完整', async () => {
   const skill = await provider.get((await provider.list())[0])
   if (skill.content.length < 2000) throw new Error('正文过短')
   if (!skill.content.includes('S-A-C-S-C')) throw new Error('缺 S-A-C-S-C')
+  if (!skill.content.includes('read_image')) throw new Error('缺 agent 读帧约定（read_image）')
+})
+
+await step('脚本零 API 依赖', async () => {
+  const dir = join(ROOT, 'skills', 'ecom-video-seedance', 'scripts')
+  if (existsSync(join(dir, 'ds_client.py'))) throw new Error('ds_client.py 应已删除')
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.py'))) {
+    const src = readFileSync(join(dir, f), 'utf8')
+    if (/import\s+openai/.test(src)) throw new Error(`${f} 仍在 import openai`)
+    if (/DEEPSEEK_API_KEY/.test(src)) throw new Error(`${f} 仍在读 API key`)
+  }
 })
 
 await step('面板 API 健康（内存 ctx 模拟）', async () => {

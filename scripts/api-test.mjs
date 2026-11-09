@@ -52,7 +52,7 @@ try {
   ] })
 
   const ping = await get(`${P}/api/ping`)
-  check('ping', ping.status === 200 && String(JSON.parse(ping.text).version).startsWith('0.3.'), ping.text)
+  check('ping', ping.status === 200 && /^\d+\.\d+\.\d+/.test(String(JSON.parse(ping.text).version)), ping.text)
 
   const cat = JSON.parse((await get(`${P}/api/catalog`)).text)
   check('catalog: 分镜表 2 张', cat.ok && cat.boards.length === 2, `boards=${cat.boards.length}`)

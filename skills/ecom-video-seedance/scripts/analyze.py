@@ -1,27 +1,30 @@
-"""analyze.py —— 带货视频镜头级拆解（每份视频一次，缓存复用）。
+"""analyze.py —— 镜头感知准备（零 API、零密钥、只用 ffmpeg + 标准库）。
 
-实现"反向拆解十招"的自动化：
-1. 1fps 抽帧（>120s 自动降 0.5fps）+ ffmpeg 场景切换检测 → 切分镜头
-2. 每镜头取首/中/尾关键帧，一次视觉调用产出「镜头卡」：
-   景别/视角/景深/运镜/光影/色彩/主体(人+产品)/动作时序/物理交互/字幕/卖点用途
-3. 全片一次综合调用（每镜头 1 帧）产出「带货全局分析」：
-   产品与品类/人物设定/带货框架/自然流或付费流/钩子/卖点/口播摘要/节奏结构
-4. 落盘 storyboard.json（标准分镜表），供 replicate.py 生成 Seedance 提示词
+这一步只做确定性的事，把"看视频"的素材备好：
+  1. ffprobe 取元信息（时长 / 分辨率 / 画面比例）
+  2. 1fps 抽帧（>120s 自动降 0.5fps）→ .cache/<sha16>/frames/
+  3. ffmpeg 场景切换检测（scene>0.25）→ 剪辑点
+  4. 剪辑点切分镜头（合并时长 < --min-shot 的碎片）
+  5. 每个镜头挑首 / 1/4 / 中 / 3/4 / 尾关键帧，给出绝对路径清单
+  6. 落盘 .cache/<sha16>/manifest.json，并打印"该读哪些帧"
+
+**本脚本不调用任何模型。** 看帧拆解和提示词编导由 agent 自己做：
+  · 用 read_image 逐镜读关键帧（一次并发 6-8 张），按 S-A-C-S-C 写 storyboard.json
+  · 再写提示词包 payload_<style>.json
+  · 跑 replicate.py 做字数/字段硬校验并渲染 md + HTML
 
 用法：
-  python analyze.py <video> [--fps auto] [--min-shot 0.8] [--force] [--clean]
+  python analyze.py <video> [--fps auto] [--min-shot 0.8] [--force] [--clean] [--json]
 """
 import argparse
-import base64
 import hashlib
 import json
+import re
+import shutil
 import subprocess
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
-
-from ds_client import DSClient, ChatError
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -29,45 +32,8 @@ if hasattr(sys.stdout, "reconfigure"):
 SKILL_DIR = Path(__file__).resolve().parents[1]
 CACHE_ROOT = SKILL_DIR / ".cache"
 MAX_SIDE_PX = 3600
-
-SHOT_SYSTEM = """你是专业的AI编导，正在做带货视频的反向拆解（把看到的画面翻译成可复刻的编导指令）。
-你会收到一个镜头内的若干帧图像（按时间顺序，每帧前有 [t=X.Xs] 标签）。
-
-请按 S-A-C-S-C 框架输出这个镜头的结构化拆解，JSON 格式：
-{"shot_type": "景别：极致特写/特写/近景/中景/全景/远景 之一",
- "angle": "视角：俯拍/平视/仰拍，附简短说明",
- "dof": "景深：浅(背景虚化)/深(前后清晰)",
- "camera_move": "运镜：固定镜头/缓慢推镜(dolly in)/平稳横移(pan)/环绕/跟拍/拉远(zoom out) 等，标注速度",
- "lighting": "光影：光源类型+光位+质感，如'暖光柔光，侧逆光，丁达尔效应'",
- "color": "色彩：色调+饱和度+对比度，如'暖色调，高饱和，对比适中'",
- "subject_person": "人物描述（四层：身份/外貌/服装含颜色/气质与表情的物理描述），无人出镜则为空字符串",
- "subject_product": "产品/商品描述：品类、外观、颜色、材质、包装、可见文字LOGO",
- "setting": "场景：场景类型+风格+环境细节",
- "action_steps": ["动作时序拆解：3-5个关键帧步骤，写慢写连续写过程"],
- "interaction": "物理交互：主体与产品/环境的接触细节（手指轻触/液体流动/布料摆动等），无则空字符串",
- "onscreen_text": "画面内可见文字（字幕/贴片/LOGO），无则空字符串",
- "audio_cues": "从画面推断的声音线索（口播主题/BGM情绪/产品音效），注明是推断",
- "selling_point": "本镜头承载的卖点或功能",
- "purpose": "在带货结构中的用途：黄金3秒钩子/卖点展示/效果对比/场景代入/信任建立/促单行动号召 之一或组合"}
-
-只描述画面里可见的内容，不脑补看不到的信息。只输出 JSON。"""
-
-OVERALL_SYSTEM = """你是电商带货视频的AI编导分析师。你会看到一个带货/商广视频每个镜头的中间时刻画面（按时间顺序，每帧前有 [镜头X t=X.Xs] 标签），以及各镜头的拆解卡。
-
-请输出整条视频的全局分析，JSON 格式：
-{"product": "带货产品判断：品名/品牌/品类",
- "category": "品类：美妆/食品/3C数码/家居/服饰/母婴/其他",
- "person_setting": "出镜人物设定总结（无人出镜则为空字符串）",
- "framework": "带货框架：口播介绍型/场景代入型/对比测评型/细节种草型/剧情植入型/产品展示型(无人出镜) 之一",
- "flow_type": "流量类型判断：自然流(真实感种草)/付费流(视觉冲击强转化)/通用，附判断理由",
- "hook": "开头钩子类型与内容（痛点提问/视觉奇观/结果前置/福利/悬念等）",
- "selling_points": ["全片核心卖点列表"],
- "script_summary": "口播/文案内容摘要（从字幕和画面推断，注明推断）",
- "rhythm": "节奏结构：每镜头时长分配+情绪曲线描述，如'0-3s平静引入，3-7s上升展示，7-10s高潮收尾'",
- "cta": "行动号召/转化引导内容，无则为空字符串",
- "replicate_difficulty": "复刻难度评估：哪些元素Seedance容易还原，哪些难（如特定品牌LOGO、多人交互）"}
-
-只输出 JSON。"""
+SCENE_THRESHOLD = 0.25
+MAX_KEYFRAMES = 4
 
 
 def sha256_file(path: Path) -> str:
@@ -78,48 +44,61 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def need(tool: str) -> None:
+    if not shutil.which(tool):
+        sys.exit(f"[error] 找不到 {tool}，请先安装并确保在 PATH 里（Windows 可用 winget install ffmpeg）。")
+
+
+def run(cmd, timeout):
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout)
+    return r
+
+
 def ffprobe(path: Path) -> dict:
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
-         str(path)], capture_output=True, text=True, timeout=120)
+    r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
+             str(path)], 120)
     if r.returncode != 0:
-        sys.exit(f"[error] ffprobe failed: {r.stderr[:300]}")
-    data = json.loads(r.stdout)
-    v = next(s for s in data.get("streams", []) if s.get("codec_type") == "video")
-    return {"width": v["width"], "height": v["height"],
-            "duration": float(data.get("format", {}).get("duration", 0) or 0)}
+        sys.exit(f"[error] ffprobe 失败：{(r.stderr or '').strip()[:300]}")
+    data = json.loads(r.stdout or "{}")
+    v = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    if not v:
+        sys.exit("[error] 这个文件里没有视频流。")
+    duration = float(data.get("format", {}).get("duration", 0) or 0)
+    has_audio = any(s.get("codec_type") == "audio" for s in data.get("streams", []))
+    return {"width": int(v["width"]), "height": int(v["height"]),
+            "duration": round(duration, 2), "has_audio": has_audio}
 
 
-def extract_frames(video: Path, out_dir: Path, fps: float):
+def extract_frames(video: Path, out_dir: Path, fps: float) -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(out_dir.glob("f_*.jpg"))
     if files:
         return files
     vf = f"fps={fps}"
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=width,height", "-of", "csv=p=0", str(video)],
-        capture_output=True, text=True, timeout=60)
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height", "-of", "csv=p=0", str(video)], 60)
     try:
-        w, h = (int(x) for x in r.stdout.strip().split(","))
+        w, h = (int(x) for x in (r.stdout or "").strip().split(",")[:2])
         if max(w, h) > MAX_SIDE_PX:
             vf += f",scale={MAX_SIDE_PX}:{MAX_SIDE_PX}:force_original_aspect_ratio=decrease"
-    except ValueError:
+    except (ValueError, TypeError):
         pass
-    r = subprocess.run(["ffmpeg", "-y", "-i", str(video), "-vf", vf, "-q:v", "3",
-                        "-start_number", "0", str(out_dir / "f_%05d.jpg")],
-                       capture_output=True, text=True, timeout=1800)
+    r = run(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-vf", vf, "-q:v", "3",
+             "-start_number", "0", str(out_dir / "f_%05d.jpg")], 1800)
     if r.returncode != 0:
-        sys.exit(f"[error] ffmpeg extract failed: {r.stderr[-300:]}")
-    return sorted(out_dir.glob("f_*.jpg"))
+        sys.exit(f"[error] ffmpeg 抽帧失败：{(r.stderr or '').strip()[-300:]}")
+    files = sorted(out_dir.glob("f_*.jpg"))
+    if not files:
+        sys.exit("[error] 抽帧结果为空，视频可能损坏或过短。")
+    return files
 
 
 def detect_scene_cuts(video: Path) -> list:
-    r = subprocess.run(
-        ["ffmpeg", "-i", str(video), "-vf", "select='gt(scene,0.25)',showinfo", "-f", "null", "-"],
-        capture_output=True, text=True, timeout=1800)
+    r = run(["ffmpeg", "-i", str(video), "-vf", f"select='gt(scene,{SCENE_THRESHOLD})',showinfo",
+             "-f", "null", "-"], 1800)
     cuts = []
-    for line in r.stderr.splitlines():
+    for line in (r.stderr or "").splitlines():
         if "pts_time:" in line:
             try:
                 cuts.append(round(float(line.split("pts_time:")[1].split()[0]), 2))
@@ -129,7 +108,7 @@ def detect_scene_cuts(video: Path) -> list:
 
 
 def build_shots(cuts, duration, min_shot):
-    """场景切换点 → 镜头区间列表 [(start,end),...]；无切换则整片一个镜头。"""
+    """场景切换点 → 镜头区间 [(start, end), ...]；无切换则整片一个镜头。"""
     bounds = [0.0] + [c for c in cuts if min_shot < c < duration - min_shot] + [duration]
     shots, start = [], bounds[0]
     for b in bounds[1:]:
@@ -137,132 +116,162 @@ def build_shots(cuts, duration, min_shot):
             shots.append((round(start, 2), round(b, 2)))
             start = b
     if shots and start < duration:
-        shots[-1] = (shots[-1][0], duration)
-    return shots or [(0.0, duration)]
+        shots[-1] = (shots[-1][0], round(duration, 2))
+    return shots or [(0.0, round(duration, 2))]
 
 
-def b64_block(path, label):
-    b64 = base64.b64encode(Path(path).read_bytes()).decode()
-    return [{"type": "text", "text": label},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]
+def frames_in_shot(frame_files, fps, start, end, max_n=MAX_KEYFRAMES, last=False):
+    """镜头内首 / 1/4 / 中 / 3/4 / 尾关键帧（最多 max_n 张）。
 
-
-def frames_in_shot(frame_files, fps, start, end, max_n=4):
-    """取镜头内首/中/尾关键帧（最多 max_n 张），返回 (帧路径, 时刻) 列表。"""
-    idxs = [i for i in range(len(frame_files)) if start - 1e-6 <= i / fps <= end + 1e-6]
+    区间左闭右开（末镜含尾帧），避免剪辑点上的同一帧被前后两个镜头重复取用。
+    """
+    eps = 1e-6
+    idxs = [i for i in range(len(frame_files))
+            if start - eps <= i / fps < (end + eps if last else end - eps)]
     if not idxs:
-        i0 = min(range(len(frame_files)), key=lambda k: abs(k / fps - (start + end) / 2))
-        idxs = [i0]
+        mid = (start + end) / 2
+        idxs = [min(range(len(frame_files)), key=lambda k: abs(k / fps - mid))]
     if len(idxs) > max_n:
-        pick = sorted(set([idxs[0], idxs[len(idxs) // 2], idxs[-1],
-                           idxs[len(idxs) // 4], idxs[3 * len(idxs) // 4]]))[:max_n]
-        idxs = sorted(pick)
+        picks = {idxs[0], idxs[len(idxs) // 4], idxs[len(idxs) // 2],
+                 idxs[3 * len(idxs) // 4], idxs[-1]}
+        idxs = sorted(picks)[:max_n]
     return [(frame_files[i], round(i / fps, 2)) for i in idxs]
 
 
-def normalize_shot(rec: dict, start, end) -> dict:
-    rec["start"], rec["end"] = start, end
-    rec["duration"] = round(end - start, 2)
-    for k in ("shot_type", "angle", "dof", "camera_move", "lighting", "color",
-              "subject_person", "subject_product", "setting", "interaction",
-              "onscreen_text", "audio_cues", "selling_point", "purpose"):
-        rec[k] = str(rec.get(k, "")).strip()
-    rec["action_steps"] = [str(s).strip() for s in (rec.get("action_steps") or []) if str(s).strip()][:6]
-    return rec
+def label_for(i):
+    return chr(ord("A") + i) if i < 26 else f"S{i + 1}"
 
 
-def analyze_shot(client, shot_no, start, end, kf):
-    blocks = []
-    for p, t in kf:
-        blocks += b64_block(p, f"[t={t:.1f}s]")
-    blocks.append({"type": "text",
-                   "text": f"这是镜头{shot_no}（{start:.1f}s-{end:.1f}s，共{end - start:.1f}秒）的{len(kf)}帧抽样。请输出该镜头的拆解 JSON。"})
+def ratio_label(w, h):
+    """优先给出常见比例（9:16 / 16:9 / 3:4 / 4:3 / 1:1 / 21:9），否则给宽高比数值。"""
     try:
-        data, _ = client.chat_json(blocks, system=SHOT_SYSTEM, thinking=False, max_tokens=4096)
-        return normalize_shot(data if isinstance(data, dict) else {}, start, end)
-    except ChatError as e:
-        print(f"[shot] 镜头{shot_no} analysis failed: {e}", flush=True)
-        return normalize_shot({}, start, end)
+        ratio = float(w) / float(h)
+    except ZeroDivisionError:
+        return f"{w}x{h}"
+    common = {9 / 16: "9:16", 16 / 9: "16:9", 3 / 4: "3:4", 4 / 3: "4:3",
+              1.0: "1:1", 21 / 9: "21:9", 2 / 3: "2:3", 3 / 2: "3:2"}
+    for value, label in common.items():
+        if abs(ratio - value) / value < 0.02:
+            return label
+    return f"{ratio:.2f}:1"
 
 
-def analyze_overall(client, shots):
-    blocks = []
-    for s in shots:
-        kf = s["_keyframes"]
-        blocks += b64_block(kf[len(kf) // 2][0], f"[镜头{s['id']} t={s['start']:.1f}s]")
-    digest = "\n".join(
-        f"镜头{s['id']}({s['start']:.1f}-{s['end']:.1f}s): {s['shot_type']}｜{s['camera_move']}｜"
-        f"{s['lighting']}｜产品:{s['subject_product'][:40]}｜用途:{s['purpose']}"
-        for s in shots)
-    blocks.append({"type": "text", "text": f"各镜头拆解卡摘要：\n{digest}\n\n请输出整条视频的全局分析 JSON。"})
-    data, _ = client.chat_json(blocks, system=OVERALL_SYSTEM, thinking=False, max_tokens=3000)
-    return data if isinstance(data, dict) else {}
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Shot-level decomposition of an e-commerce video")
-    ap.add_argument("video", type=Path)
-    ap.add_argument("--fps", type=float, default=0, help="抽帧率（默认：≤120s→1fps，更长→0.5fps）")
-    ap.add_argument("--min-shot", type=float, default=0.8, help="最短镜头时长（秒）")
-    ap.add_argument("--force", action="store_true")
-    ap.add_argument("--clean", action="store_true")
-    args = ap.parse_args()
-
-    video = args.video.resolve()
-    if not video.is_file():
-        sys.exit(f"video not found: {video}")
+def build_manifest(video: Path, fps_mode: str, min_shot: float, force: bool) -> dict:
+    need("ffprobe")
+    need("ffmpeg")
     sha = sha256_file(video)
-    cache_dir = CACHE_ROOT / sha[:16]
-    if args.clean:
-        if cache_dir.exists():
-            for f in cache_dir.glob("*"):
-                f.unlink()
-            cache_dir.rmdir()
-            print(f"[clean] removed {cache_dir}")
-        return
+    sha16 = sha[:16]
+    cache = CACHE_ROOT / sha16
+    manifest_path = cache / "manifest.json"
+
+    if manifest_path.is_file() and not force:
+        m = json.loads(manifest_path.read_text("utf-8"))
+        print(f"[cache] 命中缓存 {manifest_path}（--force 可重建）", flush=True)
+        return m
 
     meta = ffprobe(video)
     duration = meta["duration"]
-    fps = args.fps if args.fps > 0 else (1.0 if duration <= 120 else 0.5)
-    sb_path = cache_dir / "storyboard.json"
-    if sb_path.exists() and not args.force:
-        print(f"[cache] storyboard exists: {sb_path}")
+    if duration <= 0:
+        sys.exit("[error] 读不到时长，无法切镜头。")
+    fps = 0.5 if (fps_mode == "auto" and duration > 120) else (1.0 if fps_mode == "auto" else float(fps_mode))
+
+    cache.mkdir(parents=True, exist_ok=True)
+    print(f"[analyze] {video.name}: {meta['width']}x{meta['height']}, {duration}s, "
+          f"{ratio_label(meta['width'], meta['height'])}, fps={fps}", flush=True)
+
+    frames = extract_frames(video, cache / "frames", fps)
+    print(f"[frames] 抽到 {len(frames)} 帧 → {cache / 'frames'}", flush=True)
+
+    cuts = detect_scene_cuts(video)
+    spans = build_shots(cuts, duration, min_shot)
+    print(f"[shots] {len(frames)} 帧, {len(cuts)} 个剪辑点 → {len(spans)} 个镜头", flush=True)
+
+    shots = []
+    for i, (start, end) in enumerate(spans):
+        kfs = frames_in_shot(frames, fps, start, end, last=(i == len(spans) - 1))
+        shots.append({
+            "id": label_for(i),
+            "start": start,
+            "end": round(end, 2),
+            "duration": round(end - start, 2),
+            "frames": [{"t": t, "path": str(p.relative_to(cache)).replace("\\", "/"),
+                        "abs": str(p.resolve())} for p, t in kfs],
+        })
+
+    manifest = {
+        "video": str(video.resolve()),
+        "video_name": video.name,
+        "sha256": sha,
+        "sha16": sha16,
+        "cache_dir": str(cache.resolve()),
+        "created": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "duration": duration,
+        "width": meta["width"],
+        "height": meta["height"],
+        "ratio": ratio_label(meta["width"], meta["height"]),
+        "has_audio": meta["has_audio"],
+        "sample_fps": fps,
+        "scene_cuts": cuts,
+        "min_shot": min_shot,
+        "shots": shots,
+        "next": [
+            "用 read_image 逐镜读 frames（每镜 3-4 张，一次并发读 6-8 张）",
+            f"按 references/storyboard-schema.md 写 {cache / 'storyboard.json'}",
+            "写提示词包 payload_<style>.json（可先 --scaffold 生成骨架）",
+            "跑 python scripts/replicate.py <video> --payload payload_<style>.json --style <style> 校验并渲染",
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), "utf-8")
+    return manifest
+
+
+def print_report(m: dict):
+    print(f"\n视频：{m['video_name']}  {m['duration']}s  {m['width']}x{m['height']}（{m['ratio']}）"
+          f"  抽帧 {m['sample_fps']}fps  音轨 {'有' if m.get('has_audio') else '无'}")
+    print(f"剪辑点：{m['scene_cuts'] or '无（整片一镜）'}")
+    print(f"缓存目录：{m['cache_dir']}")
+    print("\n镜头 | 区间 | 时长 | 关键帧（read_image 直接读这些绝对路径）")
+    print("-" * 96)
+    for s in m["shots"]:
+        ts = ", ".join(f"t={f['t']:g}" for f in s["frames"])
+        print(f"  {s['id']}  | {s['start']:>5.2f}-{s['end']:>5.2f}s | {s['duration']:>5.2f}s | {ts}")
+        for f in s["frames"]:
+            print(f"       [{s['id']}] t={f['t']:<5g}s {f['abs']}")
+    print("-" * 96)
+    print("\n下一步（不调任何模型，你自己看帧）：")
+    for i, step in enumerate(m["next"], 1):
+        print(f"  {i}. {step}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="镜头感知准备：ffprobe + 抽帧 + 场景切分 + 关键帧清单（零 API）")
+    ap.add_argument("video", type=Path)
+    ap.add_argument("--fps", default="auto", help="抽帧密度：auto（≤120s→1fps，更长→0.5fps）或具体数值")
+    ap.add_argument("--min-shot", type=float, default=0.8, help="最短镜头秒数，更短的碎片会被合并（默认 0.8）")
+    ap.add_argument("--force", action="store_true", help="忽略缓存重建")
+    ap.add_argument("--clean", action="store_true", help="删掉这份视频的缓存（帧 + manifest + storyboard）后退出")
+    ap.add_argument("--json", action="store_true", help="只输出 manifest JSON（给脚本串联用）")
+    args = ap.parse_args()
+
+    video = args.video.expanduser().resolve()
+    if not video.is_file():
+        sys.exit(f"[error] 找不到视频：{video}")
+
+    if args.clean:
+        sha16 = sha256_file(video)[:16]
+        target = (CACHE_ROOT / sha16).resolve()
+        if target.is_dir() and str(target).startswith(str(CACHE_ROOT.resolve())):
+            shutil.rmtree(target)
+            print(f"[clean] 已删除 {target}")
+        else:
+            print("[clean] 没有缓存可删")
         return
 
-    print(f"[analyze] {video.name}: {meta['width']}x{meta['height']}, {duration:.1f}s, fps={fps}", flush=True)
-    t0 = time.time()
-    frame_files = extract_frames(video, cache_dir / "frames", fps)
-    cuts = detect_scene_cuts(video)
-    shot_ranges = build_shots(cuts, duration, args.min_shot)
-    print(f"[shots] {len(frame_files)} frames, {len(cuts)} scene cuts -> {len(shot_ranges)} shots: "
-          f"{[f'{a:.1f}-{b:.1f}s' for a, b in shot_ranges]}", flush=True)
-
-    client = DSClient()
-    shots = []
-    for i, (a, b) in enumerate(shot_ranges):
-        kf = frames_in_shot(frame_files, fps, a, b)
-        card = analyze_shot(client, chr(ord("A") + i), a, b, kf)
-        card["id"] = chr(ord("A") + i)
-        card["_keyframes"] = [(str(p), t) for p, t in kf]
-        shots.append(card)
-        print(f"[shot] 镜头{card['id']} done: {card['shot_type']}｜{card['camera_move']}｜"
-              f"{(card['selling_point'] or card['purpose'])[:40]} ({time.time() - t0:.0f}s)", flush=True)
-
-    overall = analyze_overall(client, shots)
-    print(f"[overall] 产品: {overall.get('product', '?')}｜框架: {overall.get('framework', '?')}｜"
-          f"{overall.get('flow_type', '?')}", flush=True)
-
-    keyframes = [{k: v for k, v in s.items() if k != "_keyframes"} for s in shots]
-    sb = {
-        "video": str(video), "video_name": video.name, "sha256": sha,
-        "model": client.model, "created": datetime.now().isoformat(timespec="seconds"),
-        "duration": duration, "width": meta["width"], "height": meta["height"],
-        "sample_fps": fps, "scene_cuts": cuts,
-        "overall": overall, "shots": keyframes,
-        "keyframes": {s["id"]: s["_keyframes"] for s in shots},
-    }
-    sb_path.write_text(json.dumps(sb, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"[done] storyboard -> {sb_path} ({time.time() - t0:.0f}s)", flush=True)
+    manifest = build_manifest(video, args.fps, args.min_shot, args.force)
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    else:
+        print_report(manifest)
 
 
 if __name__ == "__main__":
