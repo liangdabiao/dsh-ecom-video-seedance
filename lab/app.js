@@ -43,6 +43,41 @@ const shortTime = (iso) => {
 const kindLabel = (k) => KIND[k] || k || ''
 const sec = (n) => (n ? `${Math.round(n * 10) / 10}s` : '—')
 
+// 关键帧：frames 是 analyze.py 抽的原片帧（[{t 秒, path 绝对路径}]），经 /api/frame 读本地图片
+const frameUrl = (p) => `${BASE}/api/frame?p=${encodeURIComponent(String(p || ''))}`
+const frameSec = (t) => (t === null || t === undefined || t === '' ? '' : `${Math.round(Number(t) * 10) / 10}s`)
+
+function frameThumbs(s) {
+  const frames = Array.isArray(s?.frames) ? s.frames : []
+  if (!frames.length) return '<span class="no-frame">无帧</span>'
+  return `<div class="frames">${frames.map((f) =>
+    `<img class="frame" loading="lazy" src="${frameUrl(f.path)}" alt="关键帧" title="${frameSec(f.t) || '关键帧'}" data-t="${esc(frameSec(f.t))}">`
+  ).join('')}</div>`
+}
+
+// 帧放大镜：点缩略图全屏看原帧，Esc / 点击空白关闭
+function openLightbox(src, caption) {
+  let box = document.getElementById('lightbox')
+  if (!box) {
+    box = document.createElement('div')
+    box.id = 'lightbox'
+    box.className = 'lightbox'
+    box.innerHTML = '<figure><img alt="关键帧"><figcaption></figcaption></figure>'
+    box.addEventListener('click', (e) => { if (e.target === box || e.target.closest('figcaption')) box.classList.remove('show') })
+    document.body.appendChild(box)
+  }
+  box.querySelector('img').src = src
+  box.querySelector('figcaption').textContent = caption || ''
+  box.classList.add('show')
+}
+function bindFrames(root) {
+  ;(root || app).querySelectorAll('img.frame').forEach((img) =>
+    img.addEventListener('click', (e) => { e.stopPropagation(); openLightbox(img.src, img.dataset.t) }))
+}
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('lightbox')?.classList.remove('show')
+})
+
 async function api(path, opts) {
   const res = await fetch(BASE + path, opts)
   const body = await res.json().catch(() => ({}))
@@ -201,13 +236,14 @@ function renderHome() {
 
 function boardCard(b) {
   return `<div class="card" data-go="#/b/${encodeURIComponent(b.id)}">
+    ${b.firstFrame ? `<img class="card-cover" loading="lazy" src="${frameUrl(b.firstFrame.path)}" alt="首帧">` : ''}
     <div class="card-top">
       <span class="dot" style="background:${b.style ? 'var(--accent)' : 'var(--grey)'}"></span>
       <span class="card-title">${esc(b.product || b.id)}</span>
       ${b.style ? `<span class="badge">${esc(b.style)}</span>` : ''}
       ${b.rev > 1 ? `<span class="badge grey">第 ${b.rev} 版</span>` : ''}
     </div>
-    <div class="card-sub muted">${b.sceneCount} 镜 · ${sec(b.duration)} · ${b.firstShot ? esc(b.firstShot) : '—'}</div>
+    <div class="card-sub muted">${b.sceneCount} 镜 · ${sec(b.duration)}${b.frameCount ? ` · ${b.frameCount} 帧` : ''} · ${b.firstShot ? esc(b.firstShot) : '—'}</div>
     <div class="card-foot">
       <span>${esc(b.id)}</span>
       <span class="grow"></span>
@@ -280,9 +316,10 @@ async function renderBoard(id) {
         <h1>${esc(b.product || b.id)}</h1>
         ${b.style ? `<span class="badge">${esc(b.style)}</span>` : ''}
         <span class="badge grey">${scenes.length} 镜 · ${sec(duration)}</span>
+        ${scenes.some((s) => (s.frames || []).length) ? `<span class="badge grey">${scenes.reduce((n, s) => n + (s.frames || []).length, 0)} 帧</span>` : ''}
         <span class="badge grey">第 ${(b.revisions || []).length || 1} 版</span>
       </div>
-      <p style="margin-top:6px">${esc(b.id)} · 建 ${esc(shortTime(b.createdAt))} · 改 ${esc(shortTime(b.updatedAt))}</p>
+      <p style="margin-top:6px">${esc(b.id)} · 建 ${esc(shortTime(b.createdAt))} · 改 ${esc(shortTime(b.updatedAt))}${b.video ? ` · 原片 <code>${esc(b.video)}</code>` : ''}</p>
     </header>
 
     <div class="actions" style="margin-bottom:14px">
@@ -292,13 +329,14 @@ async function renderBoard(id) {
       <button class="btn danger" id="remove">删除</button>
     </div>
 
-    <div class="sec-head"><h2>镜头表</h2><span class="sub">口播 = 配音文案；画面 = 提示词要还原的内容</span></div>
+    <div class="sec-head"><h2>镜头表</h2><span class="sub">关键帧 = analyze.py 从原片抽的帧，点击放大；口播 = 配音文案</span></div>
     <div class="panel" style="padding:6px 0">
       <table class="shots">
-        <thead><tr><th style="width:42px">镜</th><th>镜头</th><th>画面</th><th>口播</th><th style="width:52px">时长</th></tr></thead>
+        <thead><tr><th style="width:42px">镜</th><th style="width:132px">关键帧</th><th>镜头</th><th>画面</th><th>口播</th><th style="width:52px">时长</th></tr></thead>
         <tbody>
           ${scenes.map((s) => `<tr>
             <td class="num">${s.index}</td>
+            <td>${frameThumbs(s)}</td>
             <td>${esc(s.shot || '')}</td>
             <td class="visual">${esc(s.visual || '')}</td>
             <td class="narration">${esc(s.narration || '')}</td>
@@ -323,6 +361,7 @@ async function renderBoard(id) {
 
   document.getElementById('copy-render').addEventListener('click', () => copy(data.rendered))
   document.getElementById('copy-json').addEventListener('click', () => copy(JSON.stringify(scenes, null, 2)))
+  bindFrames()
   document.getElementById('continue').addEventListener('click', () => start(
     `继续改这张分镜表「${b.product || b.id}」（id=${b.id}）。先用 seedance_storyboard action=get id=${b.id} 看现在的 ${scenes.length} 个镜头，` +
     `按我的要求逐镜改（保持 S-A-C-S-C 齐全、每镜 ≤200 字、带约束尾和负面词），改完用 action=save 带同一个 id 保存，note 写清这次改了什么。`))
@@ -401,18 +440,18 @@ function openEvent(id) {
       ${snap && snap.scenes ? `
         <div class="card-sub" style="margin-bottom:4px"><b>删除前快照（${snap.scenes.length} 镜）</b></div>
         <div class="panel" style="padding:6px 0"><table class="shots">
-          <thead><tr><th style="width:42px">镜</th><th>镜头</th><th>画面</th><th>口播</th><th style="width:52px">时长</th></tr></thead>
+          <thead><tr><th style="width:42px">镜</th><th style="width:132px">关键帧</th><th>镜头</th><th>画面</th><th>口播</th><th style="width:52px">时长</th></tr></thead>
           <tbody>${snap.scenes.map((s) => `<tr>
-            <td class="num">${s.index}</td><td>${esc(s.shot || '')}</td><td class="visual">${esc(s.visual || '')}</td>
+            <td class="num">${s.index}</td><td>${frameThumbs(s)}</td><td>${esc(s.shot || '')}</td><td class="visual">${esc(s.visual || '')}</td>
             <td class="narration">${esc(s.narration || '')}</td><td class="sec">${s.duration ? `${s.duration}s` : '—'}</td></tr>`).join('')}
           </tbody></table></div>
         <div class="actions" style="margin-top:12px"><button class="btn" id="restore">恢复成新分镜表</button></div>`
         : e.kind === 'delete' ? '<div class="note warn">这条删除记录没有快照（旧版本留下的记录），恢复不了。</div>' : ''}
     `
   })
+  bindFrames(viewerBody)
   const restore = document.getElementById('restore')
-  if (restore) restore.addEventListener('click', async () => {
-    try {
+  if (restore) restore.addEventListener('click', async () => {    try {
       const r = await post('/api/board/restore', { eventId: e.id })
       closeViewer()
       await boot()
@@ -530,8 +569,9 @@ ${common(f)}
 1. 先把技能目录复制到工作区（技能正文里有 cp 命令），再在工作区副本里跑 python scripts/analyze.py "${f.video}"，拿到每镜关键帧清单。
 2. 用 read_image 逐个镜头读关键帧（一次并发读 6-8 张，先通读全片再动笔），按 S-A-C-S-C 写 storyboard.json（.cache 目录）+ payload_${f.style}.json（提示词包）。
 3. 跑 python scripts/replicate.py "${f.video}" --payload payload_${f.style}.json --style ${f.style} --duration ${f.duration}，校验（每镜 ≤200 字、完整版 ≤800 字）不过就改 JSON 重跑，通过后出 HTML。
-4. 把分镜表用 seedance_storyboard action=save 存下来：product=${f.product || '（按原片推断）'}、style=${f.styleLabel}、note="初版"，
-   scenes 是 JSON 数组，每镜 {shot 镜头一句话, narration 口播, visual 画面要点, duration 秒}。
+4. 把分镜表用 seedance_storyboard action=save 存下来：product=${f.product || '（按原片推断）'}、style=${f.styleLabel}、video="${f.video}"、note="初版"，
+   scenes 是 JSON 数组，每镜 {shot 镜头一句话, narration 口播, visual 画面要点, duration 秒, frames 关键帧数组}。
+   frames 从 manifest 里按镜头区间对齐拿（每镜 2-4 张），写 [{t: 秒, path: 帧绝对路径}]——面板靠它显示原片关键帧缩略图，一定要带。
 5. 交付：给 HTML 预览路径 + 完整版提示词；说明哪些元素不可控（LOGO 等）要按差异说明处理。
 每存一版，侧栏「带货视频拆解 · 生成历史」里都会留记录。`)
   })
@@ -591,8 +631,8 @@ function renderGuide() {
       </div>
       <div class="card plain">
         <div class="card-top"><span class="card-title" style="color:var(--gold)">03 · 存档</span></div>
-        <div class="card-sub">seedance_storyboard action=save 把分镜表存进插件：侧栏能回看镜头表、复制分段提示；save 带同一个 id 就多一版，历史里留记录。</div>
-        <div class="pre" style="margin-top:8px">action=save  product / style / scenes / note</div>
+        <div class="card-sub">seedance_storyboard action=save 把分镜表存进插件：侧栏能回看镜头表 + 原片关键帧缩略图、复制分段提示；save 带同一个 id 就多一版，历史里留记录。</div>
+        <div class="pre" style="margin-top:8px">action=save  product / style / video / scenes（每镜带 frames）/ note</div>
       </div>
     </div>
 

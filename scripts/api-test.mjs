@@ -79,6 +79,30 @@ try {
   const afterRestore = JSON.parse((await get(`${P}/api/catalog`)).text)
   check('恢复后分镜表 3 张（新 id）', afterRestore.boards.length === 2 && afterRestore.boards.some((b) => b.id === restore.json.board.id))
 
+  // ── 关键帧图片服务 /api/frame（真文件，字节随便写，只验路由和内容类型）
+  const frameVideo = join(ROOT, 'demo-frame-src.mp4')
+  writeFileSync(frameVideo, 'fake', 'utf8')
+  const frameFile = join(ROOT, 'frames', 'f_00000.jpg')
+  mkdirSync(join(ROOT, 'frames'), { recursive: true })
+  writeFileSync(frameFile, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])) // JPEG 魔数
+  const bf = data.saveBoard({ product: '帧板', video: frameVideo, scenes: [
+    { shot: '开场', duration: 3, frames: [{ t: 0, path: frameFile }, { t: 1, path: join(ROOT, 'frames', 'f_99999.jpg') }] },
+  ] })
+  const frameOk = await get(`${P}/api/frame?p=${encodeURIComponent(frameFile)}`)
+  check('frame: 真帧 200 + image/jpeg', frameOk.status === 200 && frameOk.type.includes('image/jpeg'), `${frameOk.status} ${frameOk.type}`)
+  const frameGone = await get(`${P}/api/frame?p=${encodeURIComponent(join(ROOT, 'frames', 'f_99999.jpg'))}`)
+  check('frame: 帧不在 404', frameGone.status === 404, String(frameGone.status))
+  const frameRel = await get(`${P}/api/frame?p=frames%2Ff_00000.jpg`)
+  check('frame: 相对路径 400', frameRel.status === 400, String(frameRel.status))
+  const frameExt = await get(`${P}/api/frame?p=${encodeURIComponent(frameVideo)}`)
+  check('frame: 非图片扩展名 400', frameExt.status === 400, String(frameExt.status))
+  const boardF = JSON.parse((await get(`${P}/api/board?id=${encodeURIComponent(bf.id)}`)).text)
+  check('board: 详情带 frames', boardF.board.scenes[0].frames.length === 2 && boardF.board.video === frameVideo)
+  const catF = JSON.parse((await get(`${P}/api/catalog`)).text)
+  const cardF = catF.boards.find((b) => b.id === bf.id)
+  check('catalog: 卡片首帧 + 帧数', cardF && cardF.firstFrame && cardF.firstFrame.path === frameFile && cardF.frameCount === 2)
+  data.deleteBoard(bf.id)
+
   // 静态页面
   const page = await get(`${P}/`)
   check('静态页面 index.html', page.status === 200 && page.text.includes('带货视频拆解'), `${page.status} ${page.type}`)

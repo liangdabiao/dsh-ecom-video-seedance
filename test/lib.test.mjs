@@ -111,6 +111,61 @@ test('host: seedance_storyboard save/list/get/delete 全链路', async () => {
   assert.equal(del.ok, true)
 })
 
+// ── 关键帧：saveBoard 保留 frames / video，快照恢复不丢 ──────────────
+
+test('data: frames 归一化（字符串/对象/超量截断/无效丢弃）+ video 保存', () => {
+  const board = data.saveBoard({
+    product: '假发', style: '忠实复刻', video: 'D:\\v\\wig.mp4',
+    scenes: [
+      { shot: '造型亮相', duration: 3, frames: ['D:\\c\\f_00000.jpg', { t: 1, path: 'D:\\c\\f_00001.jpg' }, { path: 'D:\\c\\f_00002.jpg' }] },
+      { shot: '上妆', duration: 3, frames: [{ t: 4, abs: 'D:\\c\\f_00004.jpg' }, '', null, 42, { noPath: 1 } ] },
+      { shot: '无帧镜头', frames: [] },
+    ],
+  })
+  assert.equal(board.video, 'D:\\v\\wig.mp4')
+  const [s1, s2, s3] = board.scenes
+  assert.deepEqual(s1.frames, [
+    { t: null, path: 'D:\\c\\f_00000.jpg' },
+    { t: 1, path: 'D:\\c\\f_00001.jpg' },
+    { t: null, path: 'D:\\c\\f_00002.jpg' },
+  ])
+  assert.deepEqual(s2.frames, [{ t: 4, path: 'D:\\c\\f_00004.jpg' }])
+  assert.deepEqual(s3.frames, [])
+  // boardSummary 给卡片用：首帧 + 帧数
+  const summary = data.boardSummary(board)
+  assert.equal(summary.frameCount, 4)
+  assert.equal(summary.firstFrame.path, 'D:\\c\\f_00000.jpg')
+  // 超过 4 张截断
+  const big = data.saveBoard({ product: '截断', scenes: [{ shot: 'a', frames: Array.from({ length: 7 }, (_, i) => `D:\\c\\g_${i}.jpg`) }] })
+  assert.equal(big.scenes[0].frames.length, 4)
+  data.deleteBoard(board.id)
+  data.deleteBoard(big.id)
+})
+
+test('data: 删除快照恢复后 frames / video 还在', () => {
+  const board = data.saveBoard({
+    product: '恢复测试', video: 'D:\\v\\r.mp4',
+    scenes: [{ shot: '开场', duration: 2, frames: [{ t: 0.5, path: 'D:\\c\\r_00000.jpg' }] }],
+  })
+  data.deleteBoard(board.id)
+  const delEvent = data.listHistory({ kind: 'delete' })[0]
+  const restored = data.restoreFromHistory(delEvent.id)
+  assert.equal(restored.video, 'D:\\v\\r.mp4')
+  assert.deepEqual(restored.scenes[0].frames, [{ t: 0.5, path: 'D:\\c\\r_00000.jpg' }])
+  data.deleteBoard(restored.id)
+})
+
+test('host: save 带 frames 回执提示关键帧', async () => {
+  const saved = await host.seedanceStoryboardTool.execute({
+    action: 'save', product: '帧测试', video: 'D:\\v\\f.mp4',
+    scenes: JSON.stringify([{ shot: '开场', duration: 3, frames: [{ t: 0, path: 'D:\\c\\f_00000.jpg' }, { t: 1, path: 'D:\\c\\f_00001.jpg' }] }]),
+  })
+  assert.equal(saved.ok, true)
+  assert.match(saved.summary, /关键帧/)
+  const id = /id=(sb-\d+)/.exec(saved.summary)?.[1]
+  data.deleteBoard(id)
+})
+
 // ── 选视频弹窗（picker.js，注入 fake run，不真的弹框） ──────────────
 const picker = await import('../lib/picker.js')
 

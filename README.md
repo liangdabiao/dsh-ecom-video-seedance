@@ -19,8 +19,8 @@ DeepSeek Harness（dsh）插件：**带货视频反向拆解与 Seedance 复刻�
 | 能力 | 说明 |
 |---|---|
 | skill `ecom-video-seedance-prompt` | 随包快照：SKILL.md + references（S-A-C-S-C 编导规范、manifest/storyboard/payload 字段定义与校验规则）+ `analyze.py`（感知准备）/ `replicate.py`（校验+渲染），两个脚本都不联网 |
-| `seedance_storyboard` | 分镜表持久化：save 保存（**每保存一次多一版**）/ list / get（渲染 Seedance 分段提示）/ delete / history / stats / restore |
-| 侧栏工作台 | `/ecom-video-seedance/`：概览 · 我的分镜 · 分镜详情 · 生成历史 · 拆解·创作 · S-A-C-S-C |
+| `seedance_storyboard` | 分镜表持久化：save 保存（**每保存一次多一版**，每镜可带 `frames` 关键帧 + `video` 原片路径）/ list / get（渲染 Seedance 分段提示）/ delete / history / stats / restore |
+| 侧栏工作台 | `/ecom-video-seedance/`：概览 · 我的分镜（卡片带原片首帧封面）· 分镜详情（**镜头表带关键帧缩略图，点击放大**）· 生成历史 · 拆解·创作 · S-A-C-S-C |
 
 ## 使用
 
@@ -33,15 +33,16 @@ DeepSeek Harness（dsh）插件：**带货视频反向拆解与 Seedance 复刻�
    `storyboard.json` + `payload_<style>.json`
 3. `python scripts/replicate.py "<视频>" --payload payload_<style>.json --style faithful` ——
    硬校验（每镜 ≤200 字 / 完整版 ≤800 字 / 字段齐全 / 镜头对齐 / @参考图有准备办法），通过后渲染 md + 自包含 HTML
-4. `seedance_storyboard action=save` 存进工作台，侧栏回看、逐镜改、看历史
+4. `seedance_storyboard action=save` 存进工作台（`scenes` 每镜带上 manifest 里的 `frames` 关键帧、`video` 填原片路径），
+   侧栏回看——镜头表里直接显示原片关键帧缩略图，逐镜改、看历史
 
 ## 侧栏工作台
 
 | 页面 | 内容 |
 |---|---|
 | 概览 | 分镜表 / 镜头合计 / 时长合计 / 版本数 / 历史事件；最近分镜、最近动作 |
-| 我的分镜 | 卡片列表（产品、风格、镜数、时长、第几版、更新时间），可搜索 |
-| 分镜详情 | 镜头表（镜/镜头/画面/口播/时长）、Seedance 分段提示（一键复制）、版本历史（每版改了什么）、在对话里改、删除 |
+| 我的分镜 | 卡片列表（产品、风格、镜数、时长、帧数、第几版、更新时间，**带原片首帧封面**），可搜索 |
+| 分镜详情 | 镜头表（镜/**关键帧缩略图**/镜头/画面/口播/时长，**点缩略图全屏放大**）、原片路径、Seedance 分段提示（一键复制）、版本历史（每版改了什么）、在对话里改、删除 |
 | 生成历史 | 新建 / 更新 / 删除 / 恢复事件流，可按类型筛、搜关键词；点开看当次详情，**删除的记录带快照，可一键恢复** |
 | 拆解·创作 | 填视频路径/产品/风格/时长 → 打开新对话并带上「抽帧 → 看帧拆解 → 校验渲染 → 存分镜表」指令；**视频路径可点「浏览…」弹系统文件框选择**；没有原片可直接写脚本 |
 | S-A-C-S-C | 五要素表、三步流程、交付规范、常见问题、随包技能 |
@@ -65,18 +66,19 @@ DeepSeek Harness（dsh）插件：**带货视频反向拆解与 Seedance 复刻�
 
 `$DSH_HOME/ecom-video-seedance/`（默认 `C:\Users\<你>\.dsh\ecom-video-seedance\`）
 
-- `storyboards.json`：分镜表 + 每版快照（每张最多留 20 版，最多 100 张表）
-- `history.json`：新建/更新/删除/恢复事件（最多 300 条，删除事件带 `snapshot` 可恢复）
+- `storyboards.json`：分镜表 + 每版快照（每张最多留 20 版，最多 100 张表；每镜 `frames` 存的是 analyze.py 抽帧的**绝对路径**，帧图本体在技能 `.cache/<sha16>/frames/` 里，被 `--clean` 清掉后缩略图会显示「帧不在了」）
+- `history.json`：新建/更新/删除/恢复事件（最多 300 条，删除事件带 `snapshot` 可恢复，快照含 frames / video）
 
 页面和 `seedance_storyboard` 工具的 `history` / `stats` 动作读的是同一份数据。
+页面读帧走 `GET /api/frame?p=<帧绝对路径>`（只放行 jpg/jpeg/png/webp/gif 扩展名）。
 
 ## 自检
 
 ```bash
 npm install
-npm test                      # 快照 + 零 API 校验 + provider + 数据层 + 工具全链路（9 项，零网络）
+npm test                      # 快照 + 零 API 校验 + provider + 数据层 + 工具全链路（12 项，零网络）
 npm run selftest              # 同上再跑一遍离线自检
-node scripts/api-test.mjs     # 起本地 http 打一遍工作台接口（24 项，不碰真实数据）
+node scripts/api-test.mjs     # 起本地 http 打一遍工作台接口（31 项，含 /api/frame 关键帧服务，不碰真实数据）
 npm run build                 # client.js → dist/client.js（宿主加载的是这个产物）
 ```
 

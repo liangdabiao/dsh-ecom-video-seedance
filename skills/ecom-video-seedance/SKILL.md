@@ -90,7 +90,10 @@ python scripts/replicate.py "<视频>" --payload payload_faithful.json --style f
 ### 第 4 步：交付 + 存分镜表
 
 1. 把分镜表存进插件：`seedance_storyboard action=save`，`scenes` 每镜
-   `{shot 镜头一句话, narration 口播, visual 画面要点, duration 秒}`，`style` 填中文风格名，`note` 写"初版"。
+   `{shot 镜头一句话, narration 口播, visual 画面要点, duration 秒, frames 关键帧数组}`，`style` 填中文风格名，
+   `video` 填原片绝对路径，`note` 写"初版"。
+   `frames` 从 manifest.shots 按镜头 id 对齐拿（每镜 2-4 张），写成 `[{t: 秒, path: 帧绝对路径}]`——
+   **不写 frames 面板就只有纯文字分镜**，工作台靠它显示原片关键帧缩略图。直接创作（无原片）时省略 frames 和 video。
 2. 给用户：**HTML 预览路径** + **完整版提示词整段**（可直接粘即梦）+ **@参考图清单**怎么准备。
 3. 明确说明哪些元素**不可控**（品牌 LOGO / 水印 / 版权外观 / 密集小图背景 / 多只手），
    按 `fidelity_notes` 的处理办法交代清楚：留后期贴、去 logo 替代、降级为单只手等。

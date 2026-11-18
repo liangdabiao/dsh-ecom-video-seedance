@@ -59,7 +59,8 @@ const result = (ok, summary, data = '') => ({ ok, summary, data })
 export const seedanceStoryboardTool = {
   name: 'seedance_storyboard',
   description:
-    '管理带货视频的分镜表（持久化，每保存一次多一版）：save 保存分镜表（产品+风格+分镜数组，每镜含 shot 镜头/narration 口播/visual 画面/duration 秒数）、' +
+    '管理带货视频的分镜表（持久化，每保存一次多一版）：save 保存分镜表（产品+风格+分镜数组，每镜含 shot 镜头/narration 口播/visual 画面/duration 秒数，' +
+    '拆解原片时每镜再带 frames 关键帧数组 [{t 秒, path 帧绝对路径}]，analyze.py 抽帧后从 manifest 按镜头区间对齐拿；面板靠 frames 显示原片关键帧缩略图）、' +
     'list 列全部、get 取详情并渲染成 Seedance 分段提示文本、delete 删除、history 看生成历史（新建/更新/删除/恢复）、' +
     'stats 汇总、restore 从删除快照恢复。拆解或创作带货视频时用 save 存分镜表，用户可在侧栏「带货视频」工作台回看。' +
     '（工作台「拆解 / 创作」的视频路径支持点「浏览…」用系统文件框选择，Windows 宿主可用，其他系统需手填。）',
@@ -72,7 +73,8 @@ export const seedanceStoryboardTool = {
       id: str('get/delete：分镜表 id（list 里能看到）；save 传 id 表示覆盖更新'),
       product: str('save：产品名/主题'),
       style: str('save：可选，视频风格（如 痛点开头/剧情种草/口测评测）'),
-      scenes: str('save：分镜数组 JSON，如 [{"shot":"痛点开场","narration":"夏天还不敢穿浅色？","visual":"特写腋下汗渍","duration":3}]'),
+      video: str('save：可选，原片绝对路径（拆解时传，面板头部会显示）'),
+      scenes: str('save：分镜数组 JSON，如 [{"shot":"痛点开场","narration":"夏天还不敢穿浅色？","visual":"特写腋下汗渍","duration":3,"frames":[{"t":0,"path":"D:\\\\cache\\\\frames\\\\f_00000.jpg"}]}]；直接创作没有帧时省略 frames'),
       note: str('save：可选，这一版改了什么（写进历史，方便回看）'),
       confirm: str('delete 必须传 "yes"', { enum: ['yes'] }),
       kind: str('history：只看某一类事件', { enum: ['all', 'create', 'update', 'delete', 'restore'] }),
@@ -88,9 +90,12 @@ export const seedanceStoryboardTool = {
     if (args.action === 'save') {
       let scenes
       try { scenes = typeof args.scenes === 'string' ? JSON.parse(args.scenes) : args.scenes } catch { throw new Error('scenes 不是合法 JSON，如 [{"shot":"...","narration":"...","visual":"...","duration":3}]。') }
-      const board = saveBoard({ id: args.id, product: args.product, style: args.style, scenes, note: args.note })
+      const board = saveBoard({ id: args.id, product: args.product, style: args.style, scenes, note: args.note, video: args.video })
       const rev = (board.revisions || []).length
-      return result(true, `分镜表「${board.product || board.id}」已保存（${board.scenes.length} 个分镜，第 ${rev} 版，id=${board.id}）。用户可在侧栏「带货视频」工作台回看；get 可渲染成 Seedance 分段提示。`)
+      const frames = board.scenes.reduce((n, s) => n + (s.frames || []).length, 0)
+      return result(true,
+        `分镜表「${board.product || board.id}」已保存（${board.scenes.length} 个分镜${frames ? `，${frames} 张关键帧` : ''}，第 ${rev} 版，id=${board.id}）。` +
+        `用户可在侧栏「带货视频」工作台回看${frames ? '，镜头表里能看到原片关键帧缩略图' : ''}；get 可渲染成 Seedance 分段提示。`)
     }
 
     if (args.action === 'list') {
